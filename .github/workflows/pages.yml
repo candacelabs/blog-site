@@ -1,0 +1,75 @@
+name: Publish to GitHub Pages
+
+# Runs in the exported candacelabs/blog-site repository. Every snapshot the
+# monorepo exporter pushes to main is tested, rendered, privacy-scanned, and
+# published to Pages at blog.candace.cloud.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Test and render
+        env:
+          GH_API_TOKEN: ${{ github.token }}
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env GOCACHE=/tmp/gocache \
+            --env GOMODCACHE=/tmp/gomod \
+            --env GOPATH=/tmp/gopath \
+            --env "GITHUB_TOKEN=${GH_API_TOKEN}" \
+            --env "RELEASE_SHA=${GITHUB_SHA}" \
+            --volume "${PWD}:/src" \
+            --workdir /src \
+            golang:1.24 \
+            sh -c "go test ./... && go run . render -out public"
+
+      - name: Install privacy scanner
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+
+      - name: Check the public privacy boundary
+        run: ./scripts/check-public-content.sh public
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
